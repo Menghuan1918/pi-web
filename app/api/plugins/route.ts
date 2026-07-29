@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { compressedJson } from "@/lib/compress";
 import { existsSync, readFileSync, statSync } from "fs";
 import { basename, dirname, extname, join, relative } from "path";
 import {
@@ -281,26 +281,26 @@ function readScope(scope: unknown): PluginScope {
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const cwd = searchParams.get("cwd");
-  if (!cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
+  if (!cwd) return compressedJson(req, { error: "cwd required" }, { status: 400 });
 
   try {
     const allowedRoots = await getAllowedFileRoots();
     if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      return compressedJson(req, { error: "Access denied" }, { status: 403 });
     }
-    return NextResponse.json(await readPlugins(cwd));
+    return compressedJson(req, await readPlugins(cwd));
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return compressedJson(req, { error: String(error) }, { status: 500 });
   }
 }
 
 // POST /api/plugins body: { action, source?, scope?, cwd }
 export async function POST(req: Request) {
   if (!isApiRequestAllowed(req)) {
-    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+    return compressedJson(req, { error: "Untrusted API request" }, { status: 403 });
   }
   if (!hasJsonContentType(req)) {
-    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+    return compressedJson(req, { error: "Content-Type must be application/json" }, { status: 415 });
   }
 
   try {
@@ -310,11 +310,11 @@ export async function POST(req: Request) {
       scope?: PluginScope;
       cwd?: string;
     };
-    if (!body.cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
-    if (!body.action) return NextResponse.json({ error: "action required" }, { status: 400 });
+    if (!body.cwd) return compressedJson(req, { error: "cwd required" }, { status: 400 });
+    if (!body.action) return compressedJson(req, { error: "action required" }, { status: 400 });
     const allowedRoots = await getAllowedFileRoots();
     if (!isExistingFilePathAllowed(body.cwd, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      return compressedJson(req, { error: "Access denied" }, { status: 403 });
     }
 
     const agentDir = getAgentDir();
@@ -324,7 +324,7 @@ export async function POST(req: Request) {
     });
     const scope = readScope(body.scope);
     if (scope === "project" && !projectTrust.trusted) {
-      return NextResponse.json(
+      return compressedJson(req,
         { error: "Project resources must be trusted before modifying project plugins" },
         { status: 403 },
       );
@@ -338,27 +338,27 @@ export async function POST(req: Request) {
     const local = scope === "project";
 
     if (body.action === "install") {
-      if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
+      if (!source) return compressedJson(req, { error: "source required" }, { status: 400 });
       await packageManager.installAndPersist(source, { local });
     } else if (body.action === "remove") {
-      if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
+      if (!source) return compressedJson(req, { error: "source required" }, { status: 400 });
       await packageManager.removeAndPersist(source, { local });
     } else if (body.action === "update") {
       await packageManager.update(source);
     } else if (body.action === "disable") {
-      if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
+      if (!source) return compressedJson(req, { error: "source required" }, { status: 400 });
       setPackageDisabled(settingsManager, source, scope, true);
       await settingsManager.flush();
     } else if (body.action === "enable") {
-      if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
+      if (!source) return compressedJson(req, { error: "source required" }, { status: 400 });
       setPackageDisabled(settingsManager, source, scope, false);
       await settingsManager.flush();
     } else {
-      return NextResponse.json({ error: `Unsupported action: ${body.action}` }, { status: 400 });
+      return compressedJson(req, { error: `Unsupported action: ${body.action}` }, { status: 400 });
     }
 
-    return NextResponse.json(await readPlugins(body.cwd));
+    return compressedJson(req, await readPlugins(body.cwd));
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    return compressedJson(req, { error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }

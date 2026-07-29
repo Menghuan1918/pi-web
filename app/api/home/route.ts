@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
+import { compressedJson } from "@/lib/compress";
 import { homedir } from "os";
 
-export async function GET() {
-  return NextResponse.json({ home: homedir() });
+export async function GET(req: Request) {
+  return compressedJson(req, { home: homedir() });
 }

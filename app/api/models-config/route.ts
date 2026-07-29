@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { compressedJson } from "@/lib/compress";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -27,8 +27,8 @@ function writeModelsJson(data: Record<string, unknown>): void {
   writeFileSync(path, JSON.stringify(data, null, 2), "utf8");
 }
 
-export async function GET() {
-  return NextResponse.json(readModelsJson());
+export async function GET(req: Request) {
+  return compressedJson(req, readModelsJson());
 }
 
 export async function PUT(req: Request) {
@@ -36,8 +36,8 @@ export async function PUT(req: Request) {
     const body = await req.json() as Record<string, unknown>;
     writeModelsJson(body);
     invalidateModelsCache();
-    return NextResponse.json({ success: true });
+    return compressedJson(req, { success: true });
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return compressedJson(req, { error: String(error) }, { status: 500 });
   }
 }

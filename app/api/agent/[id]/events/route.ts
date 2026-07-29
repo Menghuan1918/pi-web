@@ -1,5 +1,6 @@
 import { resolveSessionPath } from "@/lib/session-reader";
 import { getRpcSession, startRpcSession } from "@/lib/rpc-manager";
+import { compressedSse } from "@/lib/compress";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 export const dynamic = "force-dynamic";
@@ -61,11 +62,5 @@ export async function GET(
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
+  return compressedSse(req, stream);
 }

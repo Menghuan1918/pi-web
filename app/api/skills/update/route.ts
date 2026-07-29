@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { compressedJson } from "@/lib/compress";
 import { runNpx } from "@/lib/npx";
 import type { SkillInstallScope } from "@/lib/api-types";
 import { buildSkillUpdateArgs } from "@/lib/skill-updates";
@@ -20,11 +20,11 @@ export async function POST(req: Request) {
       ? body.scope as SkillInstallScope
       : undefined;
     if (!cwd || !pkg || !scope) {
-      return NextResponse.json({ error: "cwd, package, and scope are required" }, { status: 400 });
+      return compressedJson(req, { error: "cwd, package, and scope are required" }, { status: 400 });
     }
     const allowedRoots = await getAllowedFileRoots();
     if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      return compressedJson(req, { error: "Access denied" }, { status: 403 });
     }
 
     const { skills } = await loadSkillsWithInstallInfo(cwd);
@@ -32,10 +32,10 @@ export async function POST(req: Request) {
       (item) => item.install?.package === pkg && item.install.scope === scope,
     );
     if (!skill?.install) {
-      return NextResponse.json({ error: "Installed skill not found" }, { status: 404 });
+      return compressedJson(req, { error: "Installed skill not found" }, { status: 404 });
     }
     if (!skill.install.canCheckForUpdates) {
-      return NextResponse.json({ error: "This skill cannot be updated automatically" }, { status: 400 });
+      return compressedJson(req, { error: "This skill cannot be updated automatically" }, { status: 400 });
     }
 
     const { stdout, stderr } = await runNpx(buildSkillUpdateArgs(skill.install), {
@@ -48,7 +48,7 @@ export async function POST(req: Request) {
     const updatedSkill = refreshed.skills.find(
       (item) => item.install?.package === pkg && item.install.scope === scope,
     );
-    return NextResponse.json({
+    return compressedJson(req, {
       success: true,
       skill: updatedSkill,
       output: `${stdout}${stderr}`.slice(-500),
@@ -56,7 +56,7 @@ export async function POST(req: Request) {
   } catch (error: unknown) {
     const detail = error as { stdout?: string; stderr?: string; message?: string };
     const output = `${detail.stdout ?? ""}${detail.stderr ?? ""}`;
-    return NextResponse.json(
+    return compressedJson(req,
       { error: output || detail.message || String(error) },
       { status: 500 },
     );

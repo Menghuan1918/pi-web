@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import fs from "fs";
 import path from "path";
 import {
@@ -27,6 +27,7 @@ import {
   validateUploadFileNames,
 } from "@/lib/file-upload";
 import { parseFormDataWithinLimit, RequestBodyTooLargeError } from "@/lib/bounded-form-data";
+import { compressedJson, compressedResponse, compressedSse } from "@/lib/compress";
 
 const IGNORED_NAMES = new Set([
   "node_modules", ".git", ".next", "dist", "build", "__pycache__",
@@ -80,23 +81,26 @@ function parseFileRequestType(value: string): FileRequestType | null {
   return FILE_REQUEST_TYPE_SET.has(value) ? (value as FileRequestType) : null;
 }
 
-async function getUploadDirectory(segments: string[]): Promise<
-  { directory: string } | { response: NextResponse }
+async function getUploadDirectory(
+  request: NextRequest,
+  segments: string[],
+): Promise<
+  { directory: string } | { response: Response }
 > {
   const directory = filePathFromSegments(segments);
   const allowedRoots = await getAllowedFileRoots();
   if (!isFilePathAllowed(directory, allowedRoots)) {
-    return { response: NextResponse.json({ error: "Access denied" }, { status: 403 }) };
+    return { response: compressedJson(request, { error: "Access denied" }, { status: 403 }) };
   }
 
   let stat: fs.Stats;
   try {
     stat = fs.statSync(directory);
   } catch {
-    return { response: NextResponse.json({ error: "Upload directory not found" }, { status: 404 }) };
+    return { response: compressedJson(request, { error: "Upload directory not found" }, { status: 404 }) };
   }
   if (!stat.isDirectory()) {
-    return { response: NextResponse.json({ error: "Upload target is not a directory" }, { status: 400 }) };
+    return { response: compressedJson(request, { error: "Upload target is not a directory" }, { status: 400 }) };
   }
 
   // A browsable directory can be a symlink. Resolve both sides before writes
@@ -111,7 +115,7 @@ async function getUploadDirectory(segments: string[]): Promise<
     }
   }
   if (!isFilePathAllowed(realDirectory, realRoots)) {
-    return { response: NextResponse.json({ error: "Access denied" }, { status: 403 }) };
+    return { response: compressedJson(request, { error: "Access denied" }, { status: 403 }) };
   }
 
   return { directory: realDirectory };
@@ -127,12 +131,12 @@ export async function POST(
   { params }: { params: Promise<{ path: string[] }> }
 ) {
   if (!isApiRequestAllowed(request)) {
-    return NextResponse.json({ error: "Untrusted API request" }, { status: 403 });
+    return compressedJson(request, { error: "Untrusted API request" }, { status: 403 });
   }
 
   try {
     const { path: segments } = await params;
-    const uploadDirectory = await getUploadDirectory(segments);
+    const uploadDirectory = await getUploadDirectory(request, segments);
     if ("response" in uploadDirectory) return uploadDirectory.response;
     const { directory } = uploadDirectory;
     const type = request.nextUrl.searchParams.get("type") ?? "upload";
@@ -141,22 +145,22 @@ export async function POST(
       const body = await request.json().catch(() => null) as { fileNames?: unknown } | null;
       const fileNames = parseUploadFileNames(body?.fileNames);
       if (!fileNames) {
-        return NextResponse.json({ error: "fileNames must be an array of strings" }, { status: 400 });
+        return compressedJson(request, { error: "fileNames must be an array of strings" }, { status: 400 });
       }
       const validationError = validateUploadFileNames(fileNames);
       if (validationError) {
-        return NextResponse.json({ error: validationError }, { status: 400 });
+        return compressedJson(request, { error: validationError }, { status: 400 });
       }
-      return NextResponse.json(inspectUploadTargets(directory, fileNames));
+      return compressedJson(request, inspectUploadTargets(directory, fileNames));
     }
 
     if (type !== "upload") {
-      return NextResponse.json({ error: "Invalid upload request type" }, { status: 400 });
+      return compressedJson(request, { error: "Invalid upload request type" }, { status: 400 });
     }
 
     const strategy = parseUploadConflictStrategy(request.nextUrl.searchParams.get("conflict"));
     if (!strategy) {
-      return NextResponse.json({ error: "Invalid conflict strategy" }, { status: 400 });
+      return compressedJson(request, { error: "Invalid conflict strategy" }, { status: 400 });
     }
 
     let formData: FormData;
@@ -164,26 +168,26 @@ export async function POST(
       formData = await parseFormDataWithinLimit(request, MAX_UPLOAD_REQUEST_BYTES);
     } catch (error) {
       if (error instanceof RequestBodyTooLargeError) {
-        return NextResponse.json({ error: "Uploads must total 100MB or less" }, { status: 413 });
+        return compressedJson(request, { error: "Uploads must total 100MB or less" }, { status: 413 });
       }
       throw error;
     }
     const files = formData.getAll("files").filter((entry): entry is File => typeof entry !== "string");
     if (files.some((file) => file.size > MAX_UPLOAD_FILE_BYTES)) {
-      return NextResponse.json({ error: "Each upload must be 25MB or smaller" }, { status: 413 });
+      return compressedJson(request, { error: "Each upload must be 25MB or smaller" }, { status: 413 });
     }
     if (files.reduce((total, file) => total + file.size, 0) > MAX_UPLOAD_TOTAL_BYTES) {
-      return NextResponse.json({ error: "Uploads must total 100MB or less" }, { status: 413 });
+      return compressedJson(request, { error: "Uploads must total 100MB or less" }, { status: 413 });
     }
     const fileNames = files.map((file) => file.name);
     const validationError = validateUploadFileNames(fileNames);
     if (validationError) {
-      return NextResponse.json({ error: validationError }, { status: 400 });
+      return compressedJson(request, { error: validationError }, { status: 400 });
     }
 
     const inspection = inspectUploadTargets(directory, fileNames);
     if (strategy === "error" && inspection.conflicts.length > 0) {
-      return NextResponse.json({
+      return compressedJson(request, {
         error: "One or more files already exist",
         conflicts: inspection.conflicts,
         nonReplaceable: inspection.nonReplaceable,
@@ -232,12 +236,13 @@ export async function POST(
       }
     }
 
-    return NextResponse.json(
+    return compressedJson(
+      request,
       { uploaded, skipped, errors },
       { status: errors.length > 0 ? 207 : 200 },
     );
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
+    return compressedJson(request, { error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
 
@@ -295,6 +300,10 @@ function getContentDisposition(filePath: string, asDownload = false): string {
   return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeHeaderValue(fileName)}`;
 }
 
+// NOTE: streamFile serves binary/media content (images, audio, PDFs, …) and
+// honors HTTP Range requests. Compression (Content-Encoding) is intentionally
+// NOT applied here: it is incompatible with Range/partial-content responses
+// and would only inflate already-compressed media payloads.
 function streamFile(filePath: string, stat: fs.Stats, contentType: string, rangeHeader: string | null, asDownload = false): Response {
   const headers = {
     "Content-Type": contentType,
@@ -421,7 +430,7 @@ export async function GET(
     const rawType = request.nextUrl.searchParams.get("type") ?? "list";
     const type = parseFileRequestType(rawType);
     if (!type) {
-      return NextResponse.json({ error: "Invalid file request type" }, { status: 400 });
+      return compressedJson(request, { error: "Invalid file request type" }, { status: 400 });
     }
     const sessionId = request.nextUrl.searchParams.get("sessionId");
 
@@ -432,28 +441,28 @@ export async function GET(
       type !== "list" &&
       await isFilePathReferencedBySession(filePath, sessionId);
     if (!allowedByRoot && !allowedBySessionReference) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      return compressedJson(request, { error: "Access denied" }, { status: 403 });
     }
 
     let stat: fs.Stats;
     try {
       stat = fs.statSync(filePath);
     } catch {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return compressedJson(request, { error: "Not found" }, { status: 404 });
     }
 
     if (!allowedBySessionReference && !isExistingFilePathAllowed(filePath, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      return compressedJson(request, { error: "Access denied" }, { status: 403 });
     }
 
     if (type === "read") {
       if (!stat.isFile()) {
-        return NextResponse.json({ error: "Not a file" }, { status: 400 });
+        return compressedJson(request, { error: "Not a file" }, { status: 400 });
       }
       const imageMime = getImageMime(filePath);
       if (imageMime) {
         if (stat.size > IMAGE_PREVIEW_MAX_BYTES) {
-          return NextResponse.json({ error: "Image too large (>10MB)" }, { status: 413 });
+          return compressedJson(request, { error: "Image too large (>10MB)" }, { status: 413 });
         }
         return streamFile(filePath, stat, imageMime, request.headers.get("range"));
       }
@@ -466,16 +475,16 @@ export async function GET(
         return streamFile(filePath, stat, documentMime, request.headers.get("range"));
       }
       if (stat.size > TEXT_PREVIEW_MAX_BYTES) {
-        return NextResponse.json({ error: "File too large for preview (>256KB)" }, { status: 413 });
+        return compressedJson(request, { error: "File too large for preview (>256KB)" }, { status: 413 });
       }
       const content = fs.readFileSync(filePath, "utf-8");
       const language = getLanguage(filePath);
-      return NextResponse.json({ content, language, size: stat.size });
+      return compressedJson(request, { content, language, size: stat.size });
     }
 
     if (type === "download") {
       if (!stat.isFile()) {
-        return NextResponse.json({ error: "Not a file" }, { status: 400 });
+        return compressedJson(request, { error: "Not a file" }, { status: 400 });
       }
       const mime = getImageMime(filePath) || getAudioMime(filePath) || getDocumentMime(filePath) || "application/octet-stream";
       return streamFile(filePath, stat, mime, request.headers.get("range"), true);
@@ -483,12 +492,12 @@ export async function GET(
 
     if (type === "meta") {
       if (!stat.isFile()) {
-        return NextResponse.json({ error: "Not a file" }, { status: 400 });
+        return compressedJson(request, { error: "Not a file" }, { status: 400 });
       }
       const imageMime = getImageMime(filePath);
       const audioMime = getAudioMime(filePath);
       const documentMime = getDocumentMime(filePath);
-      return NextResponse.json({
+      return compressedJson(request, {
         size: stat.size,
         language: getLanguage(filePath),
         mime: imageMime || audioMime || documentMime || "text/plain",
@@ -498,13 +507,13 @@ export async function GET(
 
     if (type === "preview") {
       if (!stat.isFile()) {
-        return NextResponse.json({ error: "Not a file" }, { status: 400 });
+        return compressedJson(request, { error: "Not a file" }, { status: 400 });
       }
       if (getFileExt(filePath) !== "docx") {
-        return NextResponse.json({ error: "Preview not available for this file type" }, { status: 400 });
+        return compressedJson(request, { error: "Preview not available for this file type" }, { status: 400 });
       }
       if (stat.size > DOCX_PREVIEW_MAX_BYTES) {
-        return NextResponse.json({ error: "DOCX too large for preview (>10MB)" }, { status: 413 });
+        return compressedJson(request, { error: "DOCX too large for preview (>10MB)" }, { status: 413 });
       }
 
       const mammoth = await import("mammoth");
@@ -516,7 +525,7 @@ export async function GET(
         }
       );
       const html = wrapDocxPreviewHtml(result.value, path.basename(filePath));
-      return new Response(html, {
+      return compressedResponse(request, html, {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
           "Cache-Control": "no-cache",
@@ -529,7 +538,7 @@ export async function GET(
 
     if (type === "watch") {
       if (!stat.isFile()) {
-        return NextResponse.json({ error: "Not a file" }, { status: 400 });
+        return compressedJson(request, { error: "Not a file" }, { status: 400 });
       }
       let watcher: fs.FSWatcher | null = null;
       let lastMtimeMs = stat.mtimeMs;
@@ -572,19 +581,12 @@ export async function GET(
           try { watcher?.close(); } catch { /* ignore */ }
         },
       });
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache, no-transform",
-          Connection: "keep-alive",
-          "X-Accel-Buffering": "no",
-        },
-      });
+      return compressedSse(request, stream);
     }
 
     // type === "list"
     if (!stat.isDirectory()) {
-      return NextResponse.json({ error: "Not a directory" }, { status: 400 });
+      return compressedJson(request, { error: "Not a directory" }, { status: 400 });
     }
 
     // Avoid per-entry stat calls for normal files and directories. Symlinks and
@@ -604,8 +606,8 @@ export async function GET(
         return a.name.localeCompare(b.name);
       });
 
-    return NextResponse.json({ entries, path: filePath });
+    return compressedJson(request, { entries, path: filePath });
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return compressedJson(request, { error: String(error) }, { status: 500 });
   }
 }

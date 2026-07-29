@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { compressedJson } from "@/lib/compress";
 import { existsSync } from "fs";
 import { randomUUID } from "crypto";
 import { allowFileRoot } from "@/lib/file-access";
@@ -14,10 +14,10 @@ export async function POST(req: Request) {
     const { cwd, ...command } = body;
 
     if (!cwd || typeof cwd !== "string") {
-      return NextResponse.json({ error: "cwd is required" }, { status: 400 });
+      return compressedJson(req, { error: "cwd is required" }, { status: 400 });
     }
     if (!existsSync(cwd)) {
-      return NextResponse.json({ error: `Directory does not exist: ${cwd}` }, { status: 400 });
+      return compressedJson(req, { error: `Directory does not exist: ${cwd}` }, { status: 400 });
     }
 
     // Use a one-time key so startRpcSession's lock doesn't conflict with real session ids
@@ -46,13 +46,13 @@ export async function POST(req: Request) {
     }
 
     if (promptCommand.type === "ensure_session") {
-      return NextResponse.json({ success: true, sessionId: realSessionId, data: null });
+      return compressedJson(req, { success: true, sessionId: realSessionId, data: null });
     }
 
     const result = await session.send(promptCommand);
 
-    return NextResponse.json({ success: true, sessionId: realSessionId, data: result });
+    return compressedJson(req, { success: true, sessionId: realSessionId, data: result });
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return compressedJson(req, { error: String(error) }, { status: 500 });
   }
 }

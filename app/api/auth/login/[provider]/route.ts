@@ -1,6 +1,7 @@
 import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { invalidateModelsCache } from "@/lib/models-cache";
+import { compressedSse, compressedJson } from "@/lib/compress";
 
 export const dynamic = "force-dynamic";
 
@@ -23,22 +24,22 @@ export async function POST(
   const { token, code } = (await req.json()) as { token?: string; code?: string };
 
   if (!token || !code) {
-    return Response.json({ error: "token and code required" }, { status: 400 });
+    return compressedJson(req, { error: "token and code required" }, { status: 400 });
   }
 
   const registry = getCallbackRegistry();
   const callbacks = registry.get(token);
   if (!callbacks) {
-    return Response.json({ error: "No pending login for token" }, { status: 404 });
+    return compressedJson(req, { error: "No pending login for token" }, { status: 404 });
   }
   // Verify token belongs to this provider (token format: "<provider>-<ts>-<random>")
   if (!token.startsWith(`${provider}-`)) {
-    return Response.json({ error: "Token does not match provider" }, { status: 400 });
+    return compressedJson(req, { error: "Token does not match provider" }, { status: 400 });
   }
 
   callbacks.resolve(code);
   registry.delete(token);
-  return Response.json({ ok: true, provider });
+  return compressedJson(req, { ok: true, provider });
 }
 
 // GET /api/auth/login/[provider] — SSE stream for OAuth flow
@@ -182,11 +183,5 @@ export async function GET(
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
+  return compressedSse(req, stream);
 }

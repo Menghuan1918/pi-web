@@ -1,11 +1,12 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { compressedJson } from "@/lib/compress";
 
 export const dynamic = "force-dynamic";
 
 // Providers that use OAuth — handled separately via /api/auth/providers
 const OAUTH_PROVIDER_IDS = new Set(["anthropic", "github-copilot", "openai-codex"]);
 
-export async function GET() {
+export async function GET(req: Request) {
   const modelRuntime = await ModelRuntime.create();
   const all = modelRuntime.getModels();
 
@@ -36,5 +37,5 @@ export async function GET() {
     });
   }
 
-  return Response.json({ providers: result });
+  return compressedJson(req, { providers: result });
 }

@@ -1,5 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { execFile } from "child_process";
+import { compressedJson } from "@/lib/compress";
 import { promisify } from "util";
 import fs from "fs";
 import path from "path";
@@ -118,26 +119,26 @@ export async function GET(req: NextRequest) {
   try {
     const cwd = req.nextUrl.searchParams.get("cwd")?.trim() ?? "";
     if (!cwd || (!cwd.startsWith("/") && !isWindowsAbsolutePath(cwd))) {
-      return NextResponse.json({ error: "cwd must be an absolute path" }, { status: 400 });
+      return compressedJson(req, { error: "cwd must be an absolute path" }, { status: 400 });
     }
     const query = req.nextUrl.searchParams.get("q")?.slice(0, MAX_QUERY_LENGTH) ?? "";
 
     const allowedRoots = await getAllowedFileRoots();
     if (!isFilePathAllowed(cwd, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      return compressedJson(req, { error: "Access denied" }, { status: 403 });
     }
 
     let stat: fs.Stats;
     try {
       stat = fs.statSync(cwd);
     } catch {
-      return NextResponse.json({ error: "Directory not found" }, { status: 404 });
+      return compressedJson(req, { error: "Directory not found" }, { status: 404 });
     }
     if (!stat.isDirectory()) {
-      return NextResponse.json({ error: "Not a directory" }, { status: 400 });
+      return compressedJson(req, { error: "Not a directory" }, { status: 400 });
     }
     if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      return compressedJson(req, { error: "Access denied" }, { status: 403 });
     }
 
     const cache = getIndexCache();
@@ -155,15 +156,15 @@ export async function GET(req: NextRequest) {
 
     if (query) {
       cached.entries ??= buildEntriesFromFiles(cached.listing.files);
-      return NextResponse.json({ matches: filterFileEntries(cached.entries, query) });
+      return compressedJson(req, { matches: filterFileEntries(cached.entries, query) });
     }
 
     const { files, hardTruncated } = cached.listing;
-    return NextResponse.json({
+    return compressedJson(req, {
       files: files.slice(0, MAX_FILES),
       truncated: hardTruncated || files.length > MAX_FILES,
     });
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return compressedJson(req, { error: String(error) }, { status: 500 });
   }
 }

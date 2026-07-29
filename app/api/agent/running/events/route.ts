@@ -1,4 +1,5 @@
 import { getRunningRpcSessionIds, subscribeRunningSessions } from "@/lib/rpc-manager";
+import { compressedSse } from "@/lib/compress";
 
 export const dynamic = "force-dynamic";
 
@@ -46,11 +47,5 @@ export async function GET(req: Request) {
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-  });
+  return compressedSse(req, stream);
 }

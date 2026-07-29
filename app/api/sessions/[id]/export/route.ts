@@ -5,8 +5,8 @@ import { tmpdir } from "os";
 import { basename, dirname, join } from "path";
 import { promisify } from "util";
 import { fileURLToPath, pathToFileURL } from "url";
-import { NextResponse } from "next/server";
 import { resolveSessionPath } from "@/lib/session-reader";
+import { compressedJson, compressedResponse } from "@/lib/compress";
 
 const execFileAsync = promisify(execFile);
 
@@ -248,7 +248,7 @@ export async function GET(
   try {
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return compressedJson(req, { error: "Session not found" }, { status: 404 });
     }
 
     const tempDir = join(tmpdir(), "pi-web-export");
@@ -263,7 +263,7 @@ export async function GET(
 
       const html = readFileSync(outputPath, "utf8");
       const patchedHtml = patchExportHtml(html);
-      return new Response(patchedHtml, {
+      return compressedResponse(req, patchedHtml, {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
           "Content-Disposition": getContentDisposition(fileName, inline),
@@ -274,6 +274,6 @@ export async function GET(
       rmSync(outputPath, { force: true });
     }
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return compressedJson(req, { error: String(error) }, { status: 500 });
   }
 }

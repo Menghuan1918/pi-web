@@ -4,6 +4,7 @@ import { createAgentSessionServices, getAgentDir, type SettingsManager } from "@
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { loadModelsWithCache, withModelRuntimeError, type ModelsData } from "@/lib/models-cache";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { compressedJson } from "@/lib/compress";
 import { projectTrustReloadOptions } from "@/lib/project-trust";
 
 export const dynamic = "force-dynamic";
@@ -102,19 +103,19 @@ export async function GET(req: Request) {
   try {
     cwdStat = await stat(cwd);
   } catch {
-    return Response.json({ error: `Directory does not exist: ${cwd}` }, { status: 400 });
+    return compressedJson(req, { error: `Directory does not exist: ${cwd}` }, { status: 400 });
   }
   if (!cwdStat.isDirectory()) {
-    return Response.json({ error: `Not a directory: ${cwd}` }, { status: 400 });
+    return compressedJson(req, { error: `Not a directory: ${cwd}` }, { status: 400 });
   }
   const allowedRoots = await getAllowedFileRoots();
   if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-    return Response.json({ error: "Access denied" }, { status: 403 });
+    return compressedJson(req, { error: "Access denied" }, { status: 403 });
   }
 
   try {
-    return Response.json(await loadModelsWithCache(cwd, () => loadModels(cwd)));
+    return compressedJson(req, await loadModelsWithCache(cwd, () => loadModels(cwd)));
   } catch {
-    return Response.json(EMPTY_MODELS);
+    return compressedJson(req, EMPTY_MODELS);
   }
 }

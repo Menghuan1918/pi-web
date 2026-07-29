@@ -1,8 +1,9 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { compressedJson } from "@/lib/compress";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
   const modelRuntime = await ModelRuntime.create();
   const credentials = await modelRuntime.listCredentials();
   const loggedInProviders = new Set(
@@ -29,5 +30,5 @@ export async function GET() {
       })
   );
 
-  return Response.json({ providers: result });
+  return compressedJson(req, { providers: result });
 }

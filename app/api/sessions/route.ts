@@ -1,13 +1,13 @@
-import { NextResponse } from "next/server";
+import { compressedJson } from "@/lib/compress";
 import { listAllSessions } from "@/lib/session-reader";
 import { getRunningRpcSessionIds } from "@/lib/rpc-manager";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const sessions = await listAllSessions();
-    return NextResponse.json({ sessions, runningSessionIds: getRunningRpcSessionIds() });
+    return compressedJson(req, { sessions, runningSessionIds: getRunningRpcSessionIds() });
   } catch (error) {
-    return NextResponse.json(
+    return compressedJson(req,
       { error: String(error) },
       { status: 500 }
     );

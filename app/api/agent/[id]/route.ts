@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { compressedJson } from "@/lib/compress";
 import { resolveSessionPath } from "@/lib/session-reader";
 import { startRpcSession, getRpcSession } from "@/lib/rpc-manager";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -17,12 +17,12 @@ export async function POST(
     const existing = getRpcSession(id);
     if (existing?.isAlive()) {
       const result = await existing.send(body);
-      return NextResponse.json({ success: true, data: result });
+      return compressedJson(req, { success: true, data: result });
     }
 
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return compressedJson(req, { error: "Session not found" }, { status: 404 });
     }
 
     const cwd = SessionManager.open(filePath).getHeader()?.cwd ?? process.cwd();
@@ -30,15 +30,15 @@ export async function POST(
     const { session } = await startRpcSession(id, filePath, cwd);
     const result = await session.send(body);
 
-    return NextResponse.json({ success: true, data: result });
+    return compressedJson(req, { success: true, data: result });
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return compressedJson(req, { error: String(error) }, { status: 500 });
   }
 }
 
 // GET /api/agent/[id] - Get current agent state
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
@@ -46,12 +46,12 @@ export async function GET(
   try {
     const session = getRpcSession(id);
     if (!session || !session.isAlive()) {
-      return NextResponse.json({ running: false });
+      return compressedJson(req, { running: false });
     }
 
     const state = await session.send({ type: "get_state" });
-    return NextResponse.json({ running: true, state });
+    return compressedJson(req, { running: true, state });
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return compressedJson(req, { error: String(error) }, { status: 500 });
   }
 }

@@ -1,5 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { stat } from "fs/promises";
+import { compressedJson } from "@/lib/compress";
 import {
   getBrowseStartDirectory,
   getParentDirectory,
@@ -17,23 +18,23 @@ export async function GET(request: NextRequest) {
     try {
       resolved = await resolveDirectory(candidate);
     } catch {
-      return NextResponse.json({ error: "Directory does not exist" }, { status: 404 });
+      return compressedJson(request, { error: "Directory does not exist" }, { status: 404 });
     }
 
 
     const directoryStat = await stat(resolved);
     if (!directoryStat.isDirectory()) {
-      return NextResponse.json({ error: "Path is not a directory" }, { status: 400 });
+      return compressedJson(request, { error: "Path is not a directory" }, { status: 400 });
     }
 
     const directories = await listDirectories(resolved);
 
-    return NextResponse.json({
+    return compressedJson(request, {
       path: resolved,
       parentPath: getParentDirectory(resolved),
       directories,
     });
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return compressedJson(request, { error: String(error) }, { status: 500 });
   }
 }

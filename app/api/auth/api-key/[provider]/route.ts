@@ -1,5 +1,5 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { NextResponse } from "next/server";
+import { compressedJson } from "@/lib/compress";
 import { invalidateModelsCache } from "@/lib/models-cache";
 
 export const dynamic = "force-dynamic";
@@ -7,13 +7,13 @@ export const dynamic = "force-dynamic";
 type Params = { params: Promise<{ provider: string }> };
 
 // GET /api/auth/api-key/[provider] — returns auth status (never returns the actual key)
-export async function GET(_req: Request, { params }: Params) {
+export async function GET(req: Request, { params }: Params) {
   const { provider } = await params;
   const modelRuntime = await ModelRuntime.create();
   const status = modelRuntime.getProviderAuthStatus(provider);
   const displayName = modelRuntime.getProvider(provider)?.name ?? provider;
   const models = modelRuntime.getModels(provider).length;
-  return NextResponse.json({ provider, displayName, configured: status.configured, source: status.source, models });
+  return compressedJson(req, { provider, displayName, configured: status.configured, source: status.source, models });
 }
 
 // POST /api/auth/api-key/[provider]  body: { apiKey: string }
@@ -22,7 +22,7 @@ export async function POST(req: Request, { params }: Params) {
   try {
     const { apiKey } = await req.json() as { apiKey?: string };
     if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
-      return NextResponse.json({ error: "apiKey is required" }, { status: 400 });
+      return compressedJson(req, { error: "apiKey is required" }, { status: 400 });
     }
     const modelRuntime = await ModelRuntime.create();
     let keySubmitted = false;
@@ -42,21 +42,21 @@ export async function POST(req: Request, { params }: Params) {
       },
     });
     invalidateModelsCache();
-    return NextResponse.json({ success: true });
+    return compressedJson(req, { success: true });
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return compressedJson(req, { error: String(error) }, { status: 500 });
   }
 }
 
 // DELETE /api/auth/api-key/[provider] — removes stored API key
-export async function DELETE(_req: Request, { params }: Params) {
+export async function DELETE(req: Request, { params }: Params) {
   const { provider } = await params;
   try {
     const modelRuntime = await ModelRuntime.create();
     await modelRuntime.logout(provider);
     invalidateModelsCache();
-    return NextResponse.json({ success: true });
+    return compressedJson(req, { success: true });
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return compressedJson(req, { error: String(error) }, { status: 500 });
   }
 }
