@@ -1056,7 +1056,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "tool_execution_start": {
         const id = event.toolCallId as string;
         const name = event.toolName as string;
-        // Tool was renamed ask_user → AskUser; accept both so historical
+        // Tool was renamed AskUser → ask_user; accept both so historical
         // session files and the new tool name both correlate correctly.
         if (name === "ask_user" || name === "AskUser") askUserToolCallIdRef.current = id;
         setLiveToolExecution({ toolCallId: id, toolName: name, startedAt: Date.now() });

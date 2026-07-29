@@ -747,7 +747,7 @@ function ToolCallBlock({ block, result, duration, activeAskUser, liveToolExecuti
   // Live execution state for THIS tool call (running timer + streaming status).
   const live = liveToolExecution && liveToolExecution.toolCallId === block.toolCallId ? liveToolExecution : undefined;
   const isRunning = !!live && !result;
-  // Tool was renamed ask_user → AskUser; accept both names so historical
+  // Tool was renamed AskUser → ask_user; accept both names so historical
   // session files and the new tool name both render the inline panel.
   const isAskUserTool = block.toolName === "ask_user" || block.toolName === "AskUser";
   const showLiveTimer = isRunning && !isAskUserTool;
