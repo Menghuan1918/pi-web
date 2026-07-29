@@ -271,6 +271,21 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 }: Props, ref) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
+  // Send mode: "enter" = plain Enter sends (Shift+Enter = newline);
+  // "cmdEnter" = only Cmd/Ctrl+Enter sends, plain Enter inserts a newline.
+  // Default to "cmdEnter". Persisted to localStorage (matches useAudio's pattern).
+  const [sendMode, setSendMode] = useState<"enter" | "cmdEnter">(() => {
+    if (typeof window === "undefined") return "cmdEnter";
+    const stored = window.localStorage.getItem("pi-send-mode");
+    return stored === "enter" ? "enter" : "cmdEnter";
+  });
+  const toggleSendMode = useCallback(() => {
+    setSendMode((prev) => {
+      const next = prev === "enter" ? "cmdEnter" : "enter";
+      try { window.localStorage.setItem("pi-send-mode", next); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelDropdownRect, setModelDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -898,16 +913,21 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       }
 
       if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        if (isStreaming && (onSteer || onFollowUp)) {
-          // Default Enter sends as steer if available, else followup
-          sendQueued(onSteer ? "steer" : "followup");
-        } else {
-          handleSend();
+        const modEnter = e.metaKey || e.ctrlKey; // Cmd (macOS) or Ctrl (others)
+        const shouldSend = sendMode === "enter" ? !modEnter : modEnter;
+        if (shouldSend) {
+          e.preventDefault();
+          if (isStreaming && (onSteer || onFollowUp)) {
+            // Default Enter sends as steer if available, else followup
+            sendQueued(onSteer ? "steer" : "followup");
+          } else {
+            handleSend();
+          }
         }
+        // else: let the textarea insert a newline (no preventDefault)
       }
     },
-    [isStreaming, onSteer, onFollowUp, onAbort, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value]
+    [isStreaming, onSteer, onFollowUp, onAbort, sendMode, slashMenuOpen, slashQuery, filteredSlashCommands, slashActiveIndex, applySlashCommand, sendQueued, handleSend, getNextSlashIndex, atMenuOpen, atQuery, atMatches, atActiveIndex, applyAtCompletion, historyMenuOpen, inputHistory, historyActiveIndex, applyHistoryInput, value]
   );
 
   const handleInput = useCallback(() => {
@@ -2170,6 +2190,49 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               </button>
             )}
 
+            {/* Send mode: plain Enter vs Cmd/Ctrl+Enter */}
+            <button
+              onClick={toggleSendMode}
+              title={
+                sendMode === "enter"
+                  ? "Send on Enter (Shift+Enter for newline). Click to require ⌘/Ctrl+Enter."
+                  : "Send on ⌘/Ctrl+Enter (Enter for newline). Click to send on Enter."
+              }
+              aria-label={sendMode === "enter" ? "Send on Enter" : "Send on Cmd or Ctrl plus Enter"}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 4,
+                height: 32,
+                padding: isMobile ? "0 6px" : "0 8px",
+                background: "none",
+                border: "none",
+                borderRadius: 9,
+                color: sendMode === "enter" ? "var(--text-muted)" : "var(--text-dim)",
+                cursor: "pointer",
+                fontSize: 12,
+                opacity: sendMode === "enter" ? 1 : 0.7,
+                transition: "background 0.12s, color 0.12s, opacity 0.12s",
+                whiteSpace: "nowrap",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "var(--bg-hover)";
+                e.currentTarget.style.color = "var(--text)";
+                e.currentTarget.style.opacity = "1";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "none";
+                e.currentTarget.style.color = sendMode === "enter" ? "var(--text-muted)" : "var(--text-dim)";
+                e.currentTarget.style.opacity = sendMode === "enter" ? "1" : "0.7";
+              }}
+            >
+              {sendMode === "enter" ? (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 10l-5 5 5 5" /><path d="M20 4v9a7 7 0 0 1-7 7H4" /></svg>
+              ) : (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 10l-5 5 5 5" /><path d="M20 4v9a7 7 0 0 1-7 7H4" /><rect x="14.5" y="3.5" width="6" height="3.5" rx="0.8" /></svg>
+              )}
+              {(!isMobile || controlsMenuOpen) && (
+                <span style={{ whiteSpace: "nowrap" }}>{sendMode === "enter" ? "Enter" : "⌘↵"}</span>
+              )}
+            </button>
             {onSoundToggle !== undefined && (
               <button
                 onClick={onSoundToggle}

@@ -19,9 +19,37 @@ import type {
   ImageContent,
   ToolCallContent,
   ThinkingContent,
+  ExtensionUiRequest,
 } from "@/lib/types";
+import { AskUserInlinePanel, type AskUserQuestion, type AskUserResponse } from "./AskUserInlinePanel";
 
 const MAX_THINKING_CACHE_ENTRIES = 100;
+
+type AskUserDialogRequest = Extract<
+  ExtensionUiRequest,
+  { method: "select" | "confirm" | "input" | "editor" }
+>;
+
+interface ActiveAskUser {
+  toolCallId: string;
+  request: AskUserDialogRequest;
+  answers: Record<number, string>;
+}
+
+interface LiveToolExecution {
+  toolCallId: string;
+  toolName: string;
+  startedAt: number;
+  partialResult?: string;
+}
+
+type AskUserRespond = (
+  request: AskUserDialogRequest,
+  response: AskUserResponse,
+  questionIndex: number,
+  displayValue: string,
+  commit: boolean,
+) => void;
 const thinkingContentCache = new Map<string, Promise<string>>();
 
 function loadThinkingContent(sessionId: string, entryId: string, blockIndex: number): Promise<string> {
@@ -69,6 +97,9 @@ interface Props {
   showTimestamp?: boolean;
   prevTimestamp?: number;
   sessionId?: string;
+  activeAskUser?: ActiveAskUser | null;
+  liveToolExecution?: LiveToolExecution | null;
+  onRespondAskUser?: AskUserRespond;
 }
 
 function formatTime(ts?: number): string | null {
@@ -98,12 +129,12 @@ function haveSameRelevantToolResults(
   return true;
 }
 
-export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId }: Props) {
+export const MessageView = memo(function MessageView({ message, isStreaming, toolResults, modelNames, cwd, onOpenFile, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent, showTimestamp, prevTimestamp, sessionId, activeAskUser, liveToolExecution, onRespondAskUser }: Props) {
   if (message.role === "user") {
     return <UserMessageView message={message as UserMessage} cwd={cwd} onOpenFile={onOpenFile} entryId={entryId} onFork={onFork} forking={forking} onNavigate={onNavigate} prevAssistantEntryId={prevAssistantEntryId} onEditContent={onEditContent} />;
   }
   if (message.role === "assistant") {
-    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} />;
+    return <AssistantMessageView message={message as AssistantMessage} isStreaming={isStreaming} toolResults={toolResults} modelNames={modelNames} cwd={cwd} onOpenFile={onOpenFile} showTimestamp={showTimestamp} prevTimestamp={prevTimestamp} sessionId={sessionId} entryId={entryId} activeAskUser={activeAskUser} liveToolExecution={liveToolExecution} onRespondAskUser={onRespondAskUser} />;
   }
   if (message.role === "toolResult") {
     // Rendered inline under its toolCall — skip standalone rendering if paired
@@ -134,7 +165,10 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     && prev.onEditContent === next.onEditContent
     && prev.showTimestamp === next.showTimestamp
     && prev.prevTimestamp === next.prevTimestamp
-    && prev.sessionId === next.sessionId;
+    && prev.sessionId === next.sessionId
+    && prev.activeAskUser === next.activeAskUser
+    && prev.liveToolExecution === next.liveToolExecution
+    && prev.onRespondAskUser === next.onRespondAskUser;
 });
 
 function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, onNavigate, prevAssistantEntryId, onEditContent }: {
@@ -349,6 +383,9 @@ function AssistantMessageView({
   prevTimestamp,
   sessionId,
   entryId,
+  activeAskUser,
+  liveToolExecution,
+  onRespondAskUser,
 }: {
   message: AssistantMessage;
   isStreaming?: boolean;
@@ -360,6 +397,9 @@ function AssistantMessageView({
   prevTimestamp?: number;
   sessionId?: string;
   entryId?: string;
+  activeAskUser?: ActiveAskUser | null;
+  liveToolExecution?: LiveToolExecution | null;
+  onRespondAskUser?: AskUserRespond;
 }) {
   const { t } = useI18n();
   const time = showTimestamp ? formatTime(message.timestamp) : null;
@@ -528,7 +568,7 @@ function AssistantMessageView({
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {blockItems.map(({ block, originalIndex }) => (
-          <BlockView key={`${entryId ?? "stream"}-${originalIndex}`} block={block} toolResults={toolResults} isStreaming={isStreaming} streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} cwd={cwd} onOpenFile={onOpenFile} sessionId={sessionId} entryId={entryId} blockIndex={originalIndex} />
+          <BlockView key={`${entryId ?? "stream"}-${originalIndex}`} block={block} toolResults={toolResults} isStreaming={isStreaming} streamingDuration={streamingDurations.get(originalIndex) ?? (block.type === "thinking" ? thinkingDurationFromFile : undefined)} toolCallDurations={toolCallDurations} cwd={cwd} onOpenFile={onOpenFile} sessionId={sessionId} entryId={entryId} blockIndex={originalIndex} activeAskUser={activeAskUser} liveToolExecution={liveToolExecution} onRespondAskUser={onRespondAskUser} />
         ))}
       </div>
 
@@ -581,7 +621,7 @@ function AssistantMessageView({
   );
 }
 
-function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, sessionId, entryId, blockIndex }: { block: AssistantContentBlock; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number>; cwd?: string; onOpenFile?: (filePath: string) => void; sessionId?: string; entryId?: string; blockIndex: number }) {
+function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCallDurations, cwd, onOpenFile, sessionId, entryId, blockIndex, activeAskUser, liveToolExecution, onRespondAskUser }: { block: AssistantContentBlock; toolResults?: Map<string, ToolResultMessage>; isStreaming?: boolean; streamingDuration?: number; toolCallDurations?: Map<string, number>; cwd?: string; onOpenFile?: (filePath: string) => void; sessionId?: string; entryId?: string; blockIndex: number; activeAskUser?: ActiveAskUser | null; liveToolExecution?: LiveToolExecution | null; onRespondAskUser?: AskUserRespond }) {
   if (block.type === "text") {
     return <TextBlock block={block as TextContent} isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile} />;
   }
@@ -592,7 +632,7 @@ function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCal
     const tc = block as ToolCallContent;
     const result = toolResults?.get(tc.toolCallId);
     const duration = toolCallDurations?.get(tc.toolCallId);
-    return <ToolCallBlock block={tc} result={result} duration={duration} />;
+    return <ToolCallBlock block={tc} result={result} duration={duration} activeAskUser={activeAskUser} liveToolExecution={liveToolExecution} onRespondAskUser={onRespondAskUser} />;
   }
   return null;
 }
@@ -684,11 +724,43 @@ function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {
 }
 
 
-function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number }) {
+function LiveTimer({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const secs = Math.max(0, Math.floor((now - startedAt) / 1000));
+  return (
+    <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+      {secs}s
+    </span>
+  );
+}
+
+function ToolCallBlock({ block, result, duration, activeAskUser, liveToolExecution, onRespondAskUser }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number; activeAskUser?: ActiveAskUser | null; liveToolExecution?: LiveToolExecution | null; onRespondAskUser?: AskUserRespond }) {
   const [expanded, setExpanded] = useState(false);
   const inputStr = JSON.stringify(block.input, null, 2);
   const isEditTool = isEditToolName(block.toolName);
   const resultDiff = result && !result.isError ? getResultDiff(result) : null;
+
+  // Live execution state for THIS tool call (running timer + streaming status).
+  const live = liveToolExecution && liveToolExecution.toolCallId === block.toolCallId ? liveToolExecution : undefined;
+  const isRunning = !!live && !result;
+  // Tool was renamed ask_user → AskUser; accept both names so historical
+  // session files and the new tool name both render the inline panel.
+  const isAskUserTool = block.toolName === "ask_user" || block.toolName === "AskUser";
+  const showLiveTimer = isRunning && !isAskUserTool;
+
+  // ask_user inline panel: active while the tool call awaits a human answer.
+  const askUserActive =
+    isAskUserTool &&
+    !!activeAskUser &&
+    activeAskUser.toolCallId === block.toolCallId &&
+    !result &&
+    !!onRespondAskUser;
+  const rawQuestions = block.input?.questions;
+  const questions: AskUserQuestion[] = Array.isArray(rawQuestions) ? (rawQuestions as AskUserQuestion[]) : [];
 
   // Result display
   const resultText = result
@@ -731,47 +803,82 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
         <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
           {getToolPreview(block)}
         </span>
-        {duration !== undefined && (
+        {showLiveTimer ? (
+          <LiveTimer startedAt={live!.startedAt} />
+        ) : duration !== undefined ? (
           <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{duration}s</span>
-        )}
+        ) : null}
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--text-dim)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
           <polyline points="2 3.5 5 6.5 8 3.5" />
         </svg>
       </button>
 
-      {/* ── Expanded: input args ── */}
-      {expanded && !isEditTool && (
+      {/* ── Live status (AwaitTask etc.) while the tool is running ── */}
+      {isRunning && live!.partialResult && (
         <pre
           style={{
             margin: 0,
             padding: "8px 10px",
             color: "var(--text-muted)",
-            fontSize: 12,
+            fontSize: 11.5,
             lineHeight: 1.5,
             overflow: "auto",
+            maxHeight: 240,
             background: "var(--bg-subtle)",
             borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
             whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
+            fontFamily: "var(--font-mono)",
           }}
         >
-          {inputStr}
+          {live!.partialResult}
         </pre>
       )}
 
-      {/* ── Paired result — only shown when expanded ── */}
-      {expanded && result && (
-        resultDiff ? (
-          <PairedDiffResult
-            diff={resultDiff}
-          />
-        ) : (
-          <PairedResult
-            text={resultText ?? ""}
-            isEmpty={resultIsEmpty}
-            isError={isError}
-          />
-        )
+      {/* ── ask_user inline panel while awaiting a human answer ── */}
+      {askUserActive ? (
+        <AskUserInlinePanel
+          questions={questions}
+          request={activeAskUser!.request}
+          answers={activeAskUser!.answers}
+          onRespond={onRespondAskUser!}
+        />
+      ) : (
+        <>
+          {/* ── Expanded: input args ── */}
+          {expanded && !isEditTool && (
+            <pre
+              style={{
+                margin: 0,
+                padding: "8px 10px",
+                color: "var(--text-muted)",
+                fontSize: 12,
+                lineHeight: 1.5,
+                overflow: "auto",
+                background: "var(--bg-subtle)",
+                borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+              }}
+            >
+              {inputStr}
+            </pre>
+          )}
+
+          {/* ── Paired result — only shown when expanded ── */}
+          {expanded && result && (
+            resultDiff ? (
+              <PairedDiffResult
+                diff={resultDiff}
+              />
+            ) : (
+              <PairedResult
+                text={resultText ?? ""}
+                isEmpty={resultIsEmpty}
+                isError={isError}
+              />
+            )
+          )}
+        </>
       )}
     </div>
   );

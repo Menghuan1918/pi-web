@@ -1,8 +1,8 @@
-import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, initTheme, SessionManager, Theme } from "@earendil-works/pi-coding-agent";
+import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir, getPackageDir, initTheme, SessionManager, Theme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
 import { existsSync, realpathSync, writeFileSync } from "fs";
-import { resolve } from "path";
+import { join, resolve } from "path";
 import { validateAgentImages } from "./image-attachments";
 import { invalidateModelsCache } from "./models-cache";
 import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
@@ -1089,6 +1089,36 @@ export function notifyRunningChange(): void {
 }
 
 /**
+ * Ensure process.argv[1] points at the real pi CLI entry (dist/cli.js).
+ *
+ * The pi-atlas task extension (CreateAgent/ResumeTask) derives the pi
+ * invocation from process.argv[1]: it assumes the running process *is* the
+ * pi CLI and re-launches `node <argv[1]> --mode rpc …`. Under pi-web the
+ * Next server process has argv[1] = next's CLI, so spawned agent tasks would
+ * run `node <next-cli> --mode rpc …`, which fails instantly with
+ * "unknown option '--mode'".
+ *
+ * Pointing argv[1] at pi-coding-agent's dist/cli.js makes the task extension
+ * spawn the real pi CLI. Runs once; if the path can't be resolved, argv[1]
+ * is left untouched and the task extension falls back to the `pi` on PATH.
+ */
+let piCliArgvEnsured = false;
+function ensurePiCliArgv(): void {
+  if (piCliArgvEnsured) return;
+  piCliArgvEnsured = true;
+  try {
+    const packageDir = getPackageDir();
+    if (!packageDir) return;
+    const cli = join(packageDir, "dist", "cli.js");
+    if (existsSync(cli)) {
+      process.argv[1] = cli;
+    }
+  } catch {
+    // Resolution failed — leave argv[1] untouched (task extension falls back to PATH `pi`).
+  }
+}
+
+/**
  * Get or create an AgentSession for the given session.
  * For new sessions (sessionFile === ""), pi generates its own id.
  * Pass toolNames to pre-configure active tools (empty array = all tools disabled).
@@ -1110,6 +1140,9 @@ export async function startRpcSession(
 
   const finishStartingSession = trackStartingSession(cwd);
   const starting = (async () => {
+    // Point argv[1] at the real pi CLI so the pi-atlas task extension can spawn
+    // sub-agent processes correctly (see ensurePiCliArgv for why this is needed).
+    ensurePiCliArgv();
     // Some extensions access the SDK's global theme even outside the terminal UI.
     initTheme();
     const agentDir = getAgentDir();

@@ -240,6 +240,24 @@ function noticeReducer(state: NoticeState, action: NoticeAction): NoticeState {
   }
 }
 
+/** Extract the live status text from a tool_execution_update partialResult.
+ * AwaitTask passes { content: [{type:"text", text}], details }; other tools may
+ * pass a plain string. Returns undefined when there is no text to show. */
+function extractPartialText(partial: unknown): string | undefined {
+  if (typeof partial === "string") return partial || undefined;
+  if (!partial || typeof partial !== "object") return undefined;
+  const content = (partial as { content?: unknown }).content;
+  if (Array.isArray(content)) {
+    for (const c of content) {
+      if (c && typeof c === "object" && (c as { type?: string }).type === "text") {
+        const text = (c as { text?: unknown }).text;
+        if (typeof text === "string") return text;
+      }
+    }
+  }
+  return undefined;
+}
+
 function extractMessageText(message: Partial<AgentMessage>): string {
   const content = (message as { content?: unknown }).content;
   if (typeof content === "string") return content;
@@ -347,7 +365,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [newSessionModel, setNewSessionModel] = useState<SelectedModel | null>(null);
   const [newSessionDefaultModel, setNewSessionDefaultModel] = useState<SelectedModel | null>(null);
   const [toolPreset, setToolPreset] = useState<"none" | "default" | "full">("default");
-  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>("auto");
+  // Default to "max" reasoning: SDK's setThinkingLevel clamps to each model's
+  // supported levels, so unsupported models simply fall back to their top level.
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevelOption>("max");
   const [retryInfo, setRetryInfo] = useState<{ attempt: number; maxAttempts: number; errorMessage?: string } | null>(null);
   const [contextUsage, setContextUsage] = useState<{ percent: number | null; contextWindow: number; tokens: number | null } | null>(null);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
@@ -366,10 +386,29 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [extensionCustomUi, setExtensionCustomUi] = useState<ExtensionUiCustomRequest | null>(null);
   const [extensionStatuses, setExtensionStatuses] = useState<ExtensionStatusItem[]>([]);
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
+  // Active ask_user interaction: the tool call awaiting a human answer, with
+  // the current extension UI request (select/confirm/input) to render inline.
+  const [activeAskUser, setActiveAskUser] = useState<{
+    toolCallId: string;
+    request: ExtensionUiDialogRequest;
+    answers: Record<number, string>;
+  } | null>(null);
+  // Live tool-execution state (start time + streaming partialResult) powering
+  // the running-tool timer and AwaitTask live status display.
+  const [liveToolExecution, setLiveToolExecution] = useState<{
+    toolCallId: string;
+    toolName: string;
+    startedAt: number;
+    partialResult?: string;
+  } | null>(null);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
+  // toolCallId of the currently-running ask_user tool, so incoming
+  // extension_ui_request events can be correlated to the ask_user call and
+  // rendered inline (instead of the generic extension modal).
+  const askUserToolCallIdRef = useRef<string | null>(null);
   const agentRunningRef = useRef(false);
   const bashRunningRef = useRef(false);
   const bashRecoveryIdRef = useRef(0);
@@ -666,6 +705,32 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
+  // Respond to an ask_user question rendered inline. `commit` is false for the
+  // select → "Other (free input)" intermediate (which spawns a follow-up input
+  // for the same question), so its value is not recorded as a final answer.
+  const respondAskUser = useCallback(async (
+    request: ExtensionUiDialogRequest,
+    response: { value: string } | { confirmed: boolean } | { cancelled: true },
+    questionIndex: number,
+    displayValue: string,
+    commit: boolean,
+  ) => {
+    if (commit) {
+      setActiveAskUser((prev) =>
+        prev
+          ? { ...prev, answers: { ...prev.answers, [questionIndex]: displayValue } }
+          : prev,
+      );
+    }
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      await sendAgentCommand(sid, { type: "extension_ui_response", id: request.id, ...response });
+    } catch (e) {
+      console.error("Failed to send ask_user response:", e);
+    }
+  }, []);
+
   const sendExtensionCustomInput = useCallback(async (request: ExtensionUiCustomRequest, data: string) => {
     const sid = sessionIdRef.current;
     if (!sid) return;
@@ -697,7 +762,22 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     switch (request.method) {
       case "select":
       case "confirm":
-      case "input":
+      case "input": {
+        // ask_user asks questions one at a time via ctx.ui.select/confirm/input.
+        // When an ask_user tool call is running, render the question inline under
+        // the tool call instead of popping the generic extension modal.
+        const askId = askUserToolCallIdRef.current;
+        if (askId) {
+          setActiveAskUser((prev) => ({
+            toolCallId: askId,
+            request,
+            answers: prev?.toolCallId === askId ? prev.answers : {},
+          }));
+        } else {
+          setExtensionDialog(request);
+        }
+        break;
+      }
       case "editor":
         setExtensionDialog(request);
         break;
@@ -976,6 +1056,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "tool_execution_start": {
         const id = event.toolCallId as string;
         const name = event.toolName as string;
+        // Tool was renamed ask_user → AskUser; accept both so historical
+        // session files and the new tool name both correlate correctly.
+        if (name === "ask_user" || name === "AskUser") askUserToolCallIdRef.current = id;
+        setLiveToolExecution({ toolCallId: id, toolName: name, startedAt: Date.now() });
         setAgentPhase((prev) => {
           const tools = prev?.kind === "running_tools" ? [...prev.tools] : [];
           if (!tools.some((t) => t.id === id)) tools.push({ id, name });
@@ -985,12 +1069,24 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
       case "tool_execution_end": {
         const id = event.toolCallId as string;
+        if (askUserToolCallIdRef.current === id) askUserToolCallIdRef.current = null;
+        setLiveToolExecution((prev) => (prev && prev.toolCallId === id ? null : prev));
+        setActiveAskUser((prev) => (prev && prev.toolCallId === id ? null : prev));
         setAgentPhase((prev) => {
           if (prev?.kind !== "running_tools") return prev;
           const tools = prev.tools.filter((t) => t.id !== id);
           if (tools.length === 0) return { kind: "waiting_model" };
           return { kind: "running_tools", tools };
         });
+        break;
+      }
+      case "tool_execution_update": {
+        const id = event.toolCallId as string;
+        const partial = extractPartialText(event.partialResult);
+        if (partial === undefined) break;
+        setLiveToolExecution((prev) =>
+          prev && prev.toolCallId === id ? { ...prev, partialResult: partial } : prev,
+        );
         break;
       }
       case "queue_update":
@@ -1633,6 +1729,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     isCompacting, compactError, compactResult, currentModel, displayModel, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
     notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
+    activeAskUser, liveToolExecution, respondAskUser,
     isAutoModelSelection: isNew && newSessionModel === null,
     agentPhase,
     isNew,
