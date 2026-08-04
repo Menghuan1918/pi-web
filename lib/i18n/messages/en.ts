@@ -213,6 +213,8 @@ export const enLocale: LocalePlugin = {
     "chat.compactContext": "Compact context",
     "chat.compacting": "Compacting…",
     "chat.compact": "Compact",
+    "chat.restartRpc": "Restart RPC",
+    "chat.restartingRpc": "Restarting…",
     "chat.stopAgent": "Stop agent",
     "chat.stop": "Stop",
     "chat.disableSound": "Disable completion sound",

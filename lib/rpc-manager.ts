@@ -567,6 +567,16 @@ export class AgentSessionWrapper {
         return { success: true };
       }
 
+      case "restart_rpc": {
+        // Full restart: destroy this AgentSession so the registry drops it and
+        // the next request rebuilds a brand-new AgentSession from the .jsonl
+        // file (fresh plugin import, fresh extension bindings, fresh tool
+        // registry). Unlike in-place `reload`, this clears any wedged
+        // extension/handler state. Must be called only when the session is idle.
+        this.destroy();
+        return { success: true };
+      }
+
       case "abort_compaction": {
         this.inner.abortCompaction();
         return null;

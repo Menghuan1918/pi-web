@@ -46,6 +46,9 @@ interface Props {
   isCompacting?: boolean;
   compactError?: string | null;
   compactResult?: CompactResultInfo | null;
+  /** Restart the pi RPC session (destroy + rebuild) to reload plugins. Idle-only. */
+  onRestartRpc?: () => void;
+  isRestartingRpc?: boolean;
   toolPreset?: "none" | "default" | "full";
   onToolPresetChange?: (preset: "none" | "default" | "full") => void;
   thinkingLevel?: "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -259,7 +262,7 @@ export function ModelErrorBanner({ error }: { error?: string | null }) {
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, onModelChange,
-  onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange,
+  onCompact, onAbortCompaction, isCompacting, compactError, compactResult, onRestartRpc, isRestartingRpc, toolPreset, onToolPresetChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   retryInfo, queuedMessages, inputHistory = [], onRecallQueue,
   slashCommands, slashCommandsLoading, onLoadSlashCommands,
@@ -2161,6 +2164,50 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   )}
                 </button>
               </div>
+            )}
+
+            {!isStreaming && onRestartRpc && (
+              <button
+                onClick={onRestartRpc}
+                disabled={isRestartingRpc}
+                title={isRestartingRpc ? t("chat.restartingRpc") : t("chat.restartRpc")}
+                aria-label={t("chat.restartRpc")}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                  padding: isMobile ? "0 6px" : "8px 12px",
+                  width: isMobile ? "auto" : undefined,
+                  height: 32,
+                  background: "none",
+                  border: "none",
+                  borderRadius: 9,
+                  color: "var(--text-muted)",
+                  cursor: isRestartingRpc ? "default" : "pointer",
+                  fontSize: 12,
+                  opacity: isRestartingRpc ? 0.6 : 1,
+                  transition: "background 0.12s, color 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  if (isRestartingRpc) return;
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                  e.currentTarget.style.color = "var(--text)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "none";
+                  e.currentTarget.style.color = "var(--text-muted)";
+                }}
+              >
+                <svg
+                  width="11" height="11" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                  style={isRestartingRpc ? { animation: "spin 0.8s linear infinite" } : undefined}
+                >
+                  <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 6.7 3" />
+                  <path d="M21 3v6h-6" />
+                  <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-6.7-3" />
+                  <path d="M3 21v-6h6" />
+                </svg>
+                {(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>{isRestartingRpc ? t("chat.restartingRpc") : t("chat.restartRpc")}</span>}
+              </button>
             )}
 
             {isStreaming && (

@@ -156,6 +156,9 @@ export type ThinkingLevelOption = "auto" | "off" | "minimal" | "low" | "medium" 
 
 const PROGRAMMATIC_SCROLL_IGNORE_MS = 700;
 const USER_SCROLL_INTENT_MS = 1200;
+// Distance (px) from the bottom within which the viewport counts as "pinned to
+// the latest output" — re-enables auto-follow once the user scrolls back down.
+const AT_BOTTOM_THRESHOLD = 24;
 const PROMPT_SETTLE_INITIAL_DELAY_MS = 800;
 const PROMPT_SETTLE_POLL_MS = 600;
 const PROMPT_SETTLE_MAX_MS = 20_000;
@@ -409,6 +412,27 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // extension_ui_request events can be correlated to the ask_user call and
   // rendered inline (instead of the generic extension modal).
   const askUserToolCallIdRef = useRef<string | null>(null);
+
+  // Find a toolCallId for an ask_user tool call that has no result yet — i.e.
+  // one still awaiting a human answer. Used to restore askUserToolCallIdRef on
+  // mount so a page refresh mid-ask_user renders the pending question inline
+  // (collapsible) instead of falling back to the generic extension modal.
+  const findPendingAskUserToolCallId = useCallback((msgs: AgentMessage[]): string | null => {
+    const answered = new Set<string>();
+    for (const m of msgs) {
+      if (m.role === "toolResult") answered.add(m.toolCallId);
+    }
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role !== "assistant") continue;
+      for (const block of (m as import("@/lib/types").AssistantMessage).content) {
+        if (block.type === "toolCall" && (block.toolName === "ask_user" || block.toolName === "AskUser") && !answered.has(block.toolCallId)) {
+          return block.toolCallId;
+        }
+      }
+    }
+    return null;
+  }, []);
   const agentRunningRef = useRef(false);
   const bashRunningRef = useRef(false);
   const bashRecoveryIdRef = useRef(0);
@@ -420,6 +444,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const executeBashRef = useRef<(command: string, excludeFromContext: boolean) => Promise<void> | undefined>(undefined);
   const userScrollIntentUntilRef = useRef(0);
   const ignoreProgrammaticScrollUntilRef = useRef(0);
+  // Last observed scrollTop, for direction-based user-scroll detection in
+  // handleScrollPositionChange (programmatic scrollToBottom only ever
+  // increases scrollTop, so a decrease is a real user scroll up).
+  const lastScrollTopRef = useRef(0);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const ensuringNewSessionRef = useRef<Promise<string | null> | null>(null);
@@ -493,6 +521,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setActiveLeafId(d.leafId);
       setMessages(d.context.messages);
       setEntryIds(d.context.entryIds ?? []);
+      // Restore the ask_user correlation ref from the freshly loaded messages.
+      // A page refresh mid-ask_user re-emits the pending extension_ui_request
+      // via SSE; without this the inline panel's ref is null and the request
+      // falls back to the generic (non-collapsible) extension modal.
+      askUserToolCallIdRef.current = findPendingAskUserToolCallId(d.context.messages);
       setCurrentModelOverride(null);
       setError(null);
       if (d.context.thinkingLevel && d.context.thinkingLevel !== "off") {
@@ -531,7 +564,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     } finally {
       if (showLoading && !messagesLoaded) setLoading(false);
     }
-  }, []);
+  }, [findPendingAskUserToolCallId]);
 
   const loadContext = useCallback(async (sid: string, leafId: string | null) => {
     try {
@@ -1372,6 +1405,40 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [isNew, newSessionCwd, session?.cwd]);
 
+  // Full RPC restart: destroy the AgentSession so the next request rebuilds a
+  // fresh one (re-importing plugins). Only when idle; mirrors the /reload
+  // slash command's post-reload refresh.
+  const [restartingRpc, setRestartingRpc] = useState(false);
+  const handleRestartRpc = useCallback(async () => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    if (agentRunningRef.current || bashRunningRef.current) {
+      addNotice({ type: "error", message: "Cannot restart while the session is busy" });
+      return;
+    }
+    setRestartingRpc(true);
+    try {
+      await sendAgentCommand(sid, { type: "restart_rpc" });
+      // destroy() dropped the wrapper; the next command rebuilds a fresh
+      // AgentSession from the .jsonl file (fresh plugin import).
+      await Promise.all([
+        loadSession(sid, false, true),
+        loadTools(sid),
+        loadSlashCommands(),
+        loadModels(),
+      ]);
+      // destroy() orphaned the old SSE stream (its onEvent closure pinned the
+      // dead wrapper). Reconnect so events flow from the rebuilt session and the
+      // old AgentSession can be released.
+      await ensureEventsConnected(sid);
+      addNotice({ type: "success", message: "Pi RPC restarted — plugins reloaded" });
+    } catch (e) {
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setRestartingRpc(false);
+    }
+  }, [addNotice, ensureEventsConnected, loadModels, loadSession, loadSlashCommands, loadTools]);
+
   const handleBuiltinSlashCommand = useCallback(async (text: string): Promise<BuiltinSlashCommandResult> => {
     if (!text.startsWith("/")) return { handled: false };
     const match = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
@@ -1566,6 +1633,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     messagesEndRef.current?.scrollIntoView({ behavior });
   }, []);
 
+  // Live-follow scroll used while streaming. Unlike scrollToBottom it does NOT
+  // set the programmatic-ignore window: direction-based detection in
+  // handleScrollPositionChange already distinguishes it from a user scroll-up
+  // (this only ever increases scrollTop), so a per-token call here must not
+  // refresh a time window that would swallow the user's own scroll-up events.
+  const scrollLiveToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "instant" });
+  }, []);
+
   const scrollUserMsgToTop = useCallback(() => {
     const container = scrollContainerRef.current;
     const el = lastUserMsgRef.current;
@@ -1584,10 +1660,31 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, []);
 
   const handleScrollPositionChange = useCallback(() => {
-    if (!agentRunningRef.current) return;
-    if (Date.now() < ignoreProgrammaticScrollUntilRef.current) return;
-    if (Date.now() > userScrollIntentUntilRef.current) return;
-    completionScrollAllowedRef.current = false;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const scrollTop = container.scrollTop;
+    // Direction-based detection: a decrease in scrollTop means the user
+    // scrolled UP (away from the latest output). Programmatic scrollToBottom
+    // only ever increases scrollTop toward max, so this never misfires on our
+    // own scrolls — which lets a user scroll-up escape auto-follow even while
+    // streaming scrolls every token (no time-window reliance).
+    const scrolledUp = scrollTop < lastScrollTopRef.current - 1;
+    lastScrollTopRef.current = scrollTop;
+    const atBottom =
+      scrollTop + container.clientHeight >=
+      container.scrollHeight - AT_BOTTOM_THRESHOLD;
+    if (atBottom) {
+      // Pinned to the latest output — (re)enable following.
+      completionScrollAllowedRef.current = true;
+    } else if (
+      scrolledUp &&
+      Date.now() > ignoreProgrammaticScrollUntilRef.current &&
+      Date.now() < userScrollIntentUntilRef.current
+    ) {
+      // Real user scroll up (not our programmatic scrollUserMsgToTop, which
+      // sets the ignore window) — stop following until they scroll back down.
+      completionScrollAllowedRef.current = false;
+    }
   }, []);
 
   // Load session on mount
@@ -1678,6 +1775,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [messages.length, agentRunning, scrollToBottom, scrollUserMsgToTop]);
 
+  // Follow the latest output while streaming: each streamed token grows the
+  // streaming bubble, so re-pin to the bottom — but only while the user is
+  // still following (pinned to the bottom). Scrolling up clears the flag via
+  // handleScrollPositionChange; scrolling back down re-enables it.
+  useEffect(() => {
+    if (!agentRunningRef.current || !completionScrollAllowedRef.current) return;
+    scrollLiveToBottom();
+  }, [streamState.streamingMessage, scrollLiveToBottom]);
+
   // Load model list
   useEffect(() => {
     const controller = new AbortController();
@@ -1744,6 +1850,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages,
     dispatch, setAgentRunning, setForkingEntryId,
     bashRunning, pendingBash,
+    handleRestartRpc, restartingRpc,
     // Subscriptions
     handleAgentEventRef,
   };

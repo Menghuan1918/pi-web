@@ -44,6 +44,16 @@ const OTHER_OPTION = "Other (free input)";
  * the user answer inline — mirroring the TUI multi-question experience.
  */
 export function AskUserInlinePanel({ questions, request, answers, onRespond }: Props) {
+  // Collapsed state lets the user reclaim the panel's vertical space to read
+  // the agent's output above it, then re-expand to answer. Defaults to
+  // expanded (current behavior); the user opts in to collapsing.
+  const [collapsed, setCollapsed] = useState(false);
+
+  // A new question arriving should surface itself: auto-expand on request change
+  // so the user doesn't miss a freshly-asked question while collapsed.
+  useEffect(() => {
+    setCollapsed(false);
+  }, [request.id]);
   // Correlate the current request to its question by matching the title.
   // ask_user passes the question text as the title; the select → "Other"
   // follow-up appends " (custom answer)".
@@ -60,6 +70,17 @@ export function AskUserInlinePanel({ questions, request, answers, onRespond }: P
   return (
     <div style={{ borderTop: "1px solid rgba(34,197,94,0.2)", background: "var(--bg)" }}>
       <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        onClick={() => setCollapsed((c) => !c)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setCollapsed((c) => !c);
+          }
+        }}
+        title={collapsed ? "Expand to answer" : "Collapse to view previous output"}
         style={{
           display: "flex",
           alignItems: "center",
@@ -67,16 +88,37 @@ export function AskUserInlinePanel({ questions, request, answers, onRespond }: P
           padding: "6px 10px",
           borderBottom: "1px solid var(--border)",
           background: "var(--bg-panel)",
+          cursor: "pointer",
+          userSelect: "none",
         }}
       >
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="var(--text-dim)"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ transform: collapsed ? "rotate(0deg)" : "rotate(180deg)", transition: "transform 0.15s" }}
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
         <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 650, color: "var(--accent)" }}>
           ask_user
         </span>
         <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
           Question {Math.min(currentIndex + 1, total)} of {total}
         </span>
+        {collapsed && (
+          <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-dim)", fontStyle: "italic" }}>
+            Tap to answer
+          </span>
+        )}
       </div>
 
+      {!collapsed && (
       <div style={{ padding: "8px 10px", display: "grid", gap: 9 }}>
         {questions.map((q, i) => {
           const answered = answers[i] !== undefined;
@@ -131,6 +173,7 @@ export function AskUserInlinePanel({ questions, request, answers, onRespond }: P
           );
         })}
       </div>
+      )}
     </div>
   );
 }
