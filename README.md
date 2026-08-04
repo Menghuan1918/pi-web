@@ -76,6 +76,17 @@ npx @agegr/pi-web@latest
 - **Configure less from the terminal**: manage models, login/API keys, model tests, and skill switches from the web UI.
 - **Use the interface in your language**: switch between the supported UI languages from the top bar.
 
+## pi-atlas integration
+
+This fork ships two special adaptations for [pi-atlas](https://github.com/Menghuan1918/pi-atlas) — an event-driven extension set (async bash & sub-agent tasks, goal-driven auto-continue, Feishu notifications) that turns pi into a self-driving agent for infra/SRE work.
+
+Pi Web runs pi-atlas transparently: install pi-atlas as a normal pi extension and Pi Web runs it in `rpc` mode. Most of pi-atlas (guard follow-up messages, target auto-continue, Feishu notifications) just flows through Pi Web's existing SSE event bridge — no web-specific code needed. Two things did need Pi Web-side work:
+
+- **Sub-agent process spawning.** The pi-atlas `task` extension spawns sub-agents via `create_agent` by re-launching the pi CLI derived from `process.argv[1]`. Under Pi Web's Next.js server, `argv[1]` points at the Next CLI, so spawned agents failed instantly with `unknown option '--mode'`. `lib/rpc-manager.ts` points `argv[1]` at the real pi CLI (`dist/cli.js`) at session start so sub-agents spawn correctly (falls back to `pi` on PATH if the entry can't be resolved).
+- **Inline `ask_user` panel.** pi-atlas's `ask_user` asks its questions through `extension_ui_request` events. `components/AskUserInlinePanel.tsx` renders them inline in the chat bubble — highlighting the active question, showing submitted answers, mirroring the TUI multi-question experience — and correlates the request back to the originating tool call across page refreshes. It accepts both the `ask_user` and legacy `AskUser` tool names.
+
+See the pi-atlas [architecture doc](https://github.com/Menghuan1918/pi-atlas/blob/main/docs/principles.md) for the full event-driven loop.
+
 ## Notes
 
 - **Data directory**: Pi Web reads `~/.pi/agent/sessions` by default. Set `PI_CODING_AGENT_DIR` to point at another pi agent directory.
@@ -127,6 +138,7 @@ components/
   ChatWindow.tsx      # messages, SSE, image drag/drop, minimap
   ChatInput.tsx       # input bar, model/tools/thinking/compact/slash controls
   MessageView.tsx     # message, thinking, tool call/result rendering
+  AskUserInlinePanel.tsx # inline ask_user (pi-atlas) question rendering in chat
   ModelsConfig.tsx    # model and auth configuration panel
   SkillsConfig.tsx    # skill management panel
   FileExplorer.tsx    # file tree
@@ -134,7 +146,7 @@ components/
 lib/
   directory-browser.ts # directory normalization and safe listing helpers
   http-dispatcher.ts  # HTTP(S) proxy setup for server-side fetch
-  rpc-manager.ts      # AgentSessionWrapper lifecycle and global registry
+  rpc-manager.ts      # AgentSessionWrapper lifecycle, global registry, pi-atlas argv fix
   session-reader.ts   # parses .jsonl session files and branch contexts
   normalize.ts        # normalizes toolCall field names
   file-access.ts      # file read safety boundary

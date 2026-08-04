@@ -73,6 +73,17 @@ npx @agegr/pi-web@latest
 - **随时掌握会话状态**：在顶部就能看到上下文占用、花费、压缩结果和系统提示，长会话不再像黑箱。
 - **少离开当前界面**：模型、登录/API key、模型测试和技能开关都能在网页里处理，配置 agent 时不用在多个工具之间来回切换。
 
+## pi-atlas 集成
+
+本 fork 为 [pi-atlas](https://github.com/Menghuan1918/pi-atlas) 做了两处专门适配——pi-atlas 是一组事件驱动扩展（异步 bash 与子代理任务、目标驱动自动续跑、飞书通知），把 pi 变成面向 infra/SRE 工作的自驱动 Agent。
+
+Pi Web 透明地运行 pi-atlas：把 pi-atlas 作为普通 pi 扩展装好，Pi Web 就以 `rpc` 模式运行它。pi-atlas 的大部分能力（guard 续跑消息、target 自动续跑、飞书通知）直接走 Pi Web 既有的 SSE 事件桥，无需 web 侧专门改代码。只有两处需要 Pi Web 侧做工作：
+
+- **子代理进程 spawn。** pi-atlas 的 `task` 扩展通过 `create_agent` 派生子代理，方式是从 `process.argv[1]` 推导出 pi CLI 并重跑。在 Pi Web 的 Next.js 服务端进程下，`argv[1]` 指向的是 Next CLI，派生出的子代理会立即报 `unknown option '--mode'` 失败。`lib/rpc-manager.ts` 在会话启动时把 `argv[1]` 指向真正的 pi CLI（`dist/cli.js`），让子代理正确 spawn（解析不到入口时回退到 PATH 上的 `pi`）。
+- **内联 `ask_user` 面板。** pi-atlas 的 `ask_user` 通过 `extension_ui_request` 事件逐一提问。`components/AskUserInlinePanel.tsx` 把问题内联渲染在聊天气泡里——高亮当前问题、显示已提交答案、镜像 TUI 的多问题体验——并通过回溯把请求关联到发起它的 tool call，页面刷新中途也能重建待答问题。同时接受 `ask_user` 与历史 `AskUser` 两个工具名。
+
+完整的闭环事件流见 pi-atlas 的[架构文档](https://github.com/Menghuan1918/pi-atlas/blob/main/docs/principles.md)。
+
 ## 注意事项
 
 - **数据目录**：默认读取 `~/.pi/agent/sessions` 下的会话文件。可通过环境变量 `PI_CODING_AGENT_DIR` 指定其他 pi agent 目录。
@@ -123,6 +134,7 @@ components/
   ChatWindow.tsx      # 消息区、SSE、拖拽图片、minimap
   ChatInput.tsx       # 输入栏、模型/工具/thinking/compact/slash controls
   MessageView.tsx     # 消息、thinking、tool call/result 渲染
+  AskUserInlinePanel.tsx # ask_user（pi-atlas）提问在聊天内联渲染
   ModelsConfig.tsx    # 模型和认证配置面板
   SkillsConfig.tsx    # 技能管理面板
   FileExplorer.tsx    # 文件树
@@ -130,7 +142,7 @@ components/
 lib/
   directory-browser.ts # 目录规范化和安全枚举工具
   http-dispatcher.ts  # 服务端 fetch 的 HTTP(S) 代理配置
-  rpc-manager.ts      # AgentSessionWrapper 生命周期和全局 registry
+  rpc-manager.ts      # AgentSessionWrapper 生命周期、全局 registry、pi-atlas argv 修复
   session-reader.ts   # 解析 .jsonl 会话文件和分支上下文
   normalize.ts        # 规范化 toolCall 字段名
   file-access.ts      # 文件读取安全边界
