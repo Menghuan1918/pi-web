@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, memo, useRef, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
 import { useI18n } from "@/hooks/useI18n";
 import { DirectoryPicker } from "./DirectoryPicker";
@@ -817,8 +817,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
         }
       : null);
 
-  // Build parent-child tree within the filtered set
-  const sessionTree = buildSessionTree(filteredSessions);
+  // Build parent-child tree within the filtered set (memoized: O(n log n) sort
+  // + ancestor walks per render was wasteful with hundreds of sessions)
+  const sessionTree = useMemo(() => buildSessionTree(filteredSessions), [filteredSessions]);
+
+  const handleSessionDeleted = useCallback((id: string) => {
+    onSessionDeleted?.(id);
+    loadSessions();
+  }, [onSessionDeleted, loadSessions]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -1496,10 +1502,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             unreadSessionIds={unreadSessionIds}
             onSelectSession={handleSelectSessionFromList}
             onRenamed={loadSessions}
-            onSessionDeleted={(id) => {
-              onSessionDeleted?.(id);
-              loadSessions();
-            }}
+            onSessionDeleted={handleSessionDeleted}
             depth={0}
           />
         ))}
@@ -1622,7 +1625,11 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   );
 }
 
-function SessionTreeItem({
+/**
+ * One session row (plus its children). Memoized so running-badge changes and
+ * unrelated sidebar state don't re-render every session of the project.
+ */
+const SessionTreeItem = memo(function SessionTreeItem({
   node,
   selectedSessionId,
   runningSessionIds,
@@ -1645,7 +1652,7 @@ function SessionTreeItem({
   const hasChildren = node.children.length > 0;
 
   return (
-    <div>
+    <div className="cv-session-row">
       <div style={{ position: "relative" }}>
         {/* Indent line for child sessions */}
         {depth > 0 && (
@@ -1691,7 +1698,7 @@ function SessionTreeItem({
       )}
     </div>
   );
-}
+});
 
 function RunningSessionIndicator() {
   const { t } = useI18n();

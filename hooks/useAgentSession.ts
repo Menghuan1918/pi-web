@@ -11,6 +11,7 @@ import type {
 } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
+import { fetchSessionData } from "@/lib/session-prefetch";
 import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 
@@ -524,10 +525,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false) => {
     let messagesLoaded = false;
+    // Independent of the context payload — start it early so it flies in
+    // parallel instead of adding a serial round-trip after the (larger) fetch.
+    const statePromise = includeState
+      ? fetch(`/api/sessions/${encodeURIComponent(sid)}/state`)
+          .then(async (r) => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return (await r.json()) as { running: boolean; state?: AgentStateResponse };
+          })
+          .catch(() => null)
+      : null;
     try {
       if (showLoading) setLoading(true);
-      const params = new URLSearchParams({ deferThinking: "1", deferMedia: "1" });
-      const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}?${params}`);
+      const res = await fetchSessionData(sid);
       if (res.status === 404) {
         if (showLoading) {
           setData(null);
@@ -560,9 +570,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (!includeState) return null;
 
       try {
-        const stateRes = await fetch(`/api/sessions/${encodeURIComponent(sid)}/state`);
-        if (!stateRes.ok) throw new Error(`HTTP ${stateRes.status}`);
-        const agentState = await stateRes.json() as { running: boolean; state?: AgentStateResponse };
+        const agentState = await statePromise;
+        if (!agentState) throw new Error("state fetch failed");
         if (sessionIdRef.current !== sid) return null;
 
         const liveState = agentState.state;
